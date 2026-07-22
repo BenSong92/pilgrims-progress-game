@@ -41,7 +41,10 @@ const io = new Server(httpServer);
 // 중력은 world 전역이 아니라 플레이어별로 상승/정점/하강 구간을 나눠 수동 적용한다
 // (마리오풍 점프 곡선을 위해). 따라서 world 자체의 중력은 0으로 둔다.
 const world = new CANNON.World({ gravity: new CANNON.Vec3(0, 0, 0) });
-world.broadphase = new CANNON.SAPBroadphase(world);
+// SAPBroadphase는 특정 상황(레이캐스트의 aabbQuery 등)에서 실제로 겹쳐있는데도
+// 후보에서 빠뜨리는 경우가 있었다(접지 판정이 특정 구역에서 계속 false로 나오는 버그로 확인됨).
+// 바디 수가 적어(수십 개) 성능 차이가 미미하므로 항상 정확한 NaiveBroadphase로 교체.
+world.broadphase = new CANNON.NaiveBroadphase();
 world.allowSleep = false;
 
 // 캐릭터는 매 틱 속도를 직접 지정해서 움직이므로(마찰로 가감속하지 않음),
@@ -54,6 +57,12 @@ world.addContactMaterial(new CANNON.ContactMaterial(groundMaterial, playerMateri
   restitution: 0,
 }));
 
+// cannon-es는 body.aabb를 "다른 바디와 한 번이라도 broadphase 페어링된 뒤"에야 채운다
+// (body.updateAABB()를 직접 부르지 않는 한). 새로 만든 static/kinematic 바디가
+// 마침 그 첫 페어링 기회를 놓치면(예: 아직 초기화 안 된 aabb끼리 비교해 "너무 멀다"고
+// 오판하는 경우), raycastClosest가 그 바디를 영원히 후보에서 빠뜨려 접지 판정이
+// 계속 false로 나온다 — "좁은 문" 구간에서 점프가 전혀 안 되던 버그의 원인이었다.
+// 생성 직후 명시적으로 updateAABB()를 호출해 이 문제를 근본적으로 막는다.
 function makeStaticBody(piece) {
   if (piece.type === 'plane_hazard') return null; // 시각 전용, 충돌체 없음
   let shape;
@@ -70,6 +79,7 @@ function makeStaticBody(piece) {
   });
   body.position.set(piece.pos.x, piece.pos.y, piece.pos.z);
   world.addBody(body);
+  body.updateAABB(); // 아래 주석 참고 — 생성 직후 명시적으로 갱신해야 함
   return body;
 }
 
@@ -94,6 +104,7 @@ function makeKinematicBody(piece) {
   });
   body.position.set(piece.pos.x, piece.pos.y, piece.pos.z);
   world.addBody(body);
+  body.updateAABB();
   return body;
 }
 
@@ -131,6 +142,7 @@ function createPlayer(socket, name) {
     collisionFilterMask: GROUP_GROUND,
   });
   world.addBody(body);
+  body.updateAABB();
 
   const color = COLORS[colorCursor % COLORS.length];
   colorCursor++;
