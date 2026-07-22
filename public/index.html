@@ -2,7 +2,7 @@
 <html lang="ko">
 <head>
 <meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 <title>천로역정: 함께 걷는 순례길</title>
 <link rel="stylesheet" href="style.css" />
 </head>
@@ -24,8 +24,8 @@
     </div>
     <p id="lobby-status" class="controls-hint"></p>
     <p class="controls-hint">
-      W/A/S/D 또는 방향키: 이동 &nbsp;·&nbsp; 스페이스바: 점프<br/>
-      마우스 드래그: 시점 회전
+      PC: W/A/S/D 또는 방향키 이동 · 스페이스바 점프 · 마우스 드래그 시점 회전<br/>
+      모바일: 왼쪽 스틱으로 이동 · 오른쪽 점프 버튼 · 화면 드래그로 시점 회전
     </p>
   </div>
 </section>
@@ -43,6 +43,11 @@
   </header>
 
   <div id="fallen-hint" class="interact-hint hidden">깊은 곳에 빠졌습니다... 마지막 경유지에서 다시 시작합니다.</div>
+
+  <div id="joystick-base" class="joystick-base">
+    <div id="joystick-knob" class="joystick-knob"></div>
+  </div>
+  <button id="jump-button" class="jump-button">점프</button>
 </section>
 
 <!-- ===================== 승리 화면 ===================== -->

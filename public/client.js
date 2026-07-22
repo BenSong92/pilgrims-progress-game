@@ -8,10 +8,11 @@ let socket = null;
 let myId = null;
 let levelStart = 0;
 let serverOffset = 0;
-let camYaw = 0.15;
+let camYaw = Math.PI / 2; // 코스가 +X 방향으로 이어지므로 기본 카메라가 그 방향을 보게 함
 const keys = {};
 let jumpQueued = false;
-let dragging = false, lastPointerX = 0;
+let dragging = false, dragPointerId = null, lastPointerX = 0;
+const touchMove = { active: false, ix: 0, iz: 0, pointerId: null };
 
 const entities = new Map(); // id -> { mesh, name, color, current:{x,y,z}, target:{x,y,z}, yaw }
 const kinematicMeshes = []; // parallel to LEVEL.kinematics
@@ -21,6 +22,7 @@ window.addEventListener('DOMContentLoaded', init);
 function init() {
   cacheDom();
   bindUi();
+  bindTouchControls();
   initThree();
   buildLevelMeshes();
 
@@ -47,6 +49,50 @@ function cacheDom() {
   els.fallenHint = document.getElementById('fallen-hint');
   els.victory = document.getElementById('victory-overlay');
   els.toast = document.getElementById('toast');
+  els.joystickBase = document.getElementById('joystick-base');
+  els.joystickKnob = document.getElementById('joystick-knob');
+  els.jumpButton = document.getElementById('jump-button');
+}
+
+function bindTouchControls() {
+  const base = els.joystickBase;
+  const knob = els.joystickKnob;
+  const maxRadius = 42;
+
+  function setKnob(x, y) {
+    knob.style.transform = `translate(${x}px, ${y}px)`;
+  }
+
+  base.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    touchMove.pointerId = e.pointerId;
+    touchMove.active = true;
+    base.setPointerCapture(e.pointerId);
+  });
+  base.addEventListener('pointermove', (e) => {
+    if (e.pointerId !== touchMove.pointerId) return;
+    const rect = base.getBoundingClientRect();
+    const cx = rect.left + rect.width / 2, cy = rect.top + rect.height / 2;
+    let dx = e.clientX - cx, dy = e.clientY - cy;
+    const len = Math.hypot(dx, dy);
+    if (len > maxRadius) { dx = (dx / len) * maxRadius; dy = (dy / len) * maxRadius; }
+    setKnob(dx, dy);
+    touchMove.ix = dx / maxRadius;
+    touchMove.iz = -dy / maxRadius;
+  });
+  function releaseJoystick(e) {
+    if (e.pointerId !== touchMove.pointerId) return;
+    touchMove.active = false;
+    touchMove.ix = 0; touchMove.iz = 0; touchMove.pointerId = null;
+    setKnob(0, 0);
+  }
+  base.addEventListener('pointerup', releaseJoystick);
+  base.addEventListener('pointercancel', releaseJoystick);
+
+  els.jumpButton.addEventListener('pointerdown', (e) => {
+    e.stopPropagation();
+    jumpQueued = true;
+  });
 }
 
 function bindUi() {
@@ -112,10 +158,20 @@ function initThree() {
   sun.position.set(150, 260, 100);
   scene.add(sun);
 
-  renderer.domElement.addEventListener('pointerdown', (e) => { dragging = true; lastPointerX = e.clientX; });
-  window.addEventListener('pointerup', () => { dragging = false; });
+  renderer.domElement.addEventListener('pointerdown', (e) => {
+    if (dragging) return;
+    dragging = true;
+    dragPointerId = e.pointerId;
+    lastPointerX = e.clientX;
+  });
+  window.addEventListener('pointerup', (e) => {
+    if (e.pointerId === dragPointerId) { dragging = false; dragPointerId = null; }
+  });
+  window.addEventListener('pointercancel', (e) => {
+    if (e.pointerId === dragPointerId) { dragging = false; dragPointerId = null; }
+  });
   window.addEventListener('pointermove', (e) => {
-    if (!dragging) return;
+    if (!dragging || e.pointerId !== dragPointerId) return;
     const dx = e.clientX - lastPointerX;
     lastPointerX = e.clientX;
     camYaw -= dx * 0.006;
@@ -193,26 +249,71 @@ function buildPieceMesh(piece) {
 }
 
 // ---------- player figures ----------
+// 서버(server/index.js)의 PLAYER_RADIUS와 반드시 일치해야 함 — 물리 구체 중심(로컬 y=0)을
+// 기준으로 발이 지면(y=-PLAYER_RADIUS)에 닿도록 캐릭터를 정렬한다.
+const PLAYER_RADIUS = 1.4;
+
 function buildPlayerFigure(color) {
   const g = new THREE.Group();
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(1.1, 1.4, 3.6, 10),
-    new THREE.MeshLambertMaterial({ color })
-  );
-  body.position.y = 2.6;
-  const head = new THREE.Mesh(
-    new THREE.SphereGeometry(1.05, 12, 10),
-    new THREE.MeshLambertMaterial({ color: '#e0b088' })
-  );
-  head.position.y = 5.4;
+  const cloth = new THREE.MeshLambertMaterial({ color });
+  const skin = new THREE.MeshLambertMaterial({ color: '#e0b088' });
+
+  const groundY = -PLAYER_RADIUS;
+  const legLen = 1.6, hipY = groundY + legLen;
+  const torsoH = 1.4, torsoTop = hipY + torsoH;
+  const armLen = 1.4, shoulderY = torsoTop - 0.1;
+  const headR = 0.6, headY = torsoTop + headR;
+
+  const torso = new THREE.Mesh(new THREE.BoxGeometry(1.5, torsoH, 0.85), cloth);
+  torso.position.y = hipY + torsoH / 2;
+  g.add(torso);
+
+  const head = new THREE.Mesh(new THREE.SphereGeometry(headR, 14, 10), skin);
+  head.position.y = headY;
+  g.add(head);
+
   const nose = new THREE.Mesh(
-    new THREE.ConeGeometry(0.4, 1, 8),
+    new THREE.ConeGeometry(0.16, 0.36, 8),
     new THREE.MeshLambertMaterial({ color: '#2a2016' })
   );
   nose.rotation.x = Math.PI / 2;
-  nose.position.set(0, 3, 1.3);
-  g.add(body, head, nose);
+  nose.position.set(0, headY, headR * 0.9);
+  g.add(nose);
+
+  function makeLimb(length, r1, r2, x, y, mat) {
+    const pivot = new THREE.Group();
+    pivot.position.set(x, y, 0);
+    const mesh = new THREE.Mesh(new THREE.CylinderGeometry(r1, r2, length, 8), mat);
+    mesh.position.y = -length / 2;
+    pivot.add(mesh);
+    g.add(pivot);
+    return pivot;
+  }
+
+  const leftLeg = makeLimb(legLen, 0.24, 0.2, -0.45, hipY, cloth);
+  const rightLeg = makeLimb(legLen, 0.24, 0.2, 0.45, hipY, cloth);
+  const leftArm = makeLimb(armLen, 0.18, 0.16, -0.92, shoulderY, skin);
+  const rightArm = makeLimb(armLen, 0.18, 0.16, 0.92, shoulderY, skin);
+
+  g.userData.limbs = { leftLeg, rightLeg, leftArm, rightArm };
+  g.userData.headTopY = headY + headR;
   return g;
+}
+
+function animateWalk(e, dt) {
+  const dx = e.current.x - (e.prevX ?? e.current.x);
+  const dz = e.current.z - (e.prevZ ?? e.current.z);
+  e.prevX = e.current.x; e.prevZ = e.current.z;
+  const speed = Math.hypot(dx, dz) / Math.max(dt, 0.0001);
+  const intensity = Math.min(1, speed / 7);
+  e.walkPhase = (e.walkPhase || 0) + Math.min(speed, 22) * dt * 0.4;
+  const swing = Math.sin(e.walkPhase) * 0.9 * intensity;
+  const limbs = e.mesh.userData.limbs;
+  if (!limbs) return;
+  limbs.leftLeg.rotation.x = swing;
+  limbs.rightLeg.rotation.x = -swing;
+  limbs.leftArm.rotation.x = -swing * 0.75;
+  limbs.rightArm.rotation.x = swing * 0.75;
 }
 
 function ensureEntity(p) {
@@ -220,7 +321,7 @@ function ensureEntity(p) {
   if (!e) {
     const mesh = buildPlayerFigure(p.color);
     const label = makeTextSprite(p.name, { scale: 7 });
-    label.position.y = 8;
+    label.position.y = mesh.userData.headTopY + 0.7;
     mesh.add(label);
     scene.add(mesh);
     e = { mesh, current: { ...p.pos }, target: { ...p.pos }, yaw: p.yaw || 0, name: p.name };
@@ -271,8 +372,9 @@ function showFallenHint() {
 
 // ---------- input & camera ----------
 function computeMoveVec() {
-  const ix = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
-  const iz = (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
+  let ix = (keys['d'] || keys['arrowright'] ? 1 : 0) - (keys['a'] || keys['arrowleft'] ? 1 : 0);
+  let iz = (keys['w'] || keys['arrowup'] ? 1 : 0) - (keys['s'] || keys['arrowdown'] ? 1 : 0);
+  if (touchMove.active) { ix = touchMove.ix; iz = touchMove.iz; }
   if (ix === 0 && iz === 0) return { x: 0, z: 0 };
   const fx = Math.sin(camYaw), fz = Math.cos(camYaw);
   const rx = Math.cos(camYaw), rz = -Math.sin(camYaw);
@@ -315,6 +417,7 @@ function loop() {
       e.current.z += (e.target.z - e.current.z) * smooth;
       e.mesh.position.set(e.current.x, e.current.y, e.current.z);
       e.mesh.rotation.y = e.yaw;
+      animateWalk(e, dt);
     });
 
     const self = entities.get(myId);
