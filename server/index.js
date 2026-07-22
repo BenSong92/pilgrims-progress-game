@@ -25,6 +25,9 @@ const GRAVITY_RISE = 28;        // 상승 구간 중력
 const GRAVITY_FALL = 42;        // 하강 구간 중력 (더 강하게 — 스냅감 있는 낙하)
 const GRAVITY_APEX = 12;        // 정점 부근 중력 (살짝 붕 뜨는 행타임)
 const APEX_VY_THRESHOLD = 4;    // 이 속도 이하일 때 "정점 부근"으로 간주
+// 접지 판정이 네트워크 지연/타이밍 오차로 순간적으로 흔들려도(레이캐스트 노이즈 등)
+// 같은 점프 도중 점프가 여러 번 겹쳐 발사되어 비정상적으로 높이 뛰는 것을 막는 안전장치
+const MIN_JUMP_INTERVAL_MS = 300;
 
 const COLORS = ['#c0392b', '#2e7d32', '#1f6fb2', '#c99a2e', '#8e44ad', '#16a085', '#d35400', '#7f8c8d'];
 
@@ -144,6 +147,7 @@ function createPlayer(socket, name) {
     lastGroundedAt: -Infinity,
     jumpBufferedAt: -Infinity,
     jumpFiredThisContact: false,
+    lastJumpFiredAt: 0,
     jumpCut: false,
     lastCheckpoint: 'cp0',
     lastCheckpointPos: { ...LEVEL.spawn, y: LEVEL.spawn.y + 2 },
@@ -259,9 +263,12 @@ setInterval(() => {
     // 지금 누르고 있거나(착지 전부터 계속 누르고 있던 경우 포함), 착지 직전에 눌렀던 입력이 버퍼 시간 안이면 점프 요청으로 간주
     const jumpRequested = p.input.jump || (now - p.jumpBufferedAt <= JUMP_BUFFER_MS);
 
-    if (withinCoyote && jumpRequested && !p.jumpFiredThisContact) {
+    const cooldownOk = now - (p.lastJumpFiredAt || 0) >= MIN_JUMP_INTERVAL_MS;
+
+    if (withinCoyote && jumpRequested && !p.jumpFiredThisContact && cooldownOk) {
       p.body.velocity.y = JUMP_SPEED;
       p.jumpFiredThisContact = true;  // 같은 접지 구간에서 중복 발사 방지
+      p.lastJumpFiredAt = now;
       p.jumpBufferedAt = -Infinity;   // 점프 소비
       p.lastGroundedAt = -Infinity;   // 같은 공중 상태에서 코요테 타임으로 재점프 방지
       p.jumpCut = false;
