@@ -377,7 +377,7 @@ function computeMoveVec() {
   if (touchMove.active) { ix = touchMove.ix; iz = touchMove.iz; }
   if (ix === 0 && iz === 0) return { x: 0, z: 0 };
   const fx = Math.sin(camYaw), fz = Math.cos(camYaw);
-  const rx = Math.cos(camYaw), rz = -Math.sin(camYaw);
+  const rx = -Math.cos(camYaw), rz = Math.sin(camYaw);
   let x = fx * iz + rx * ix;
   let z = fz * iz + rz * ix;
   const len = Math.hypot(x, z) || 1;
