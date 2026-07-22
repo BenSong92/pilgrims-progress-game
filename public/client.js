@@ -323,8 +323,8 @@ function ensureEntity(p) {
   let e = entities.get(p.id);
   if (!e) {
     const mesh = buildPlayerFigure(p.color);
-    const label = makeTextSprite(p.name, { scale: 7 });
-    label.position.y = mesh.userData.headTopY + 0.7;
+    const label = makeTextSprite(p.name, { scale: 1.1 });
+    label.position.y = mesh.userData.headTopY + 0.5;
     mesh.add(label);
     scene.add(mesh);
     e = { mesh, current: { ...p.pos }, target: { ...p.pos }, yaw: p.yaw || 0, name: p.name };
