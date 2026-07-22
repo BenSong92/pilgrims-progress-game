@@ -10,7 +10,7 @@ let levelStart = 0;
 let serverOffset = 0;
 let camYaw = Math.PI / 2; // 코스가 +X 방향으로 이어지므로 기본 카메라가 그 방향을 보게 함
 const keys = {};
-let jumpQueued = false;
+let touchJumpHeld = false; // 점프 버튼을 누르고 있는 동안 true (가변 점프 높이 판정에 필요)
 let dragging = false, dragPointerId = null, lastPointerX = 0;
 const touchMove = { active: false, ix: 0, iz: 0, pointerId: null };
 
@@ -28,7 +28,6 @@ function init() {
 
   window.addEventListener('keydown', (e) => {
     keys[e.key.toLowerCase()] = true;
-    if (e.key === ' ') jumpQueued = true;
   });
   window.addEventListener('keyup', (e) => { keys[e.key.toLowerCase()] = false; });
   window.addEventListener('resize', onResize);
@@ -91,8 +90,12 @@ function bindTouchControls() {
 
   els.jumpButton.addEventListener('pointerdown', (e) => {
     e.stopPropagation();
-    jumpQueued = true;
+    touchJumpHeld = true;
   });
+  const releaseJumpButton = () => { touchJumpHeld = false; };
+  els.jumpButton.addEventListener('pointerup', releaseJumpButton);
+  els.jumpButton.addEventListener('pointercancel', releaseJumpButton);
+  els.jumpButton.addEventListener('pointerleave', releaseJumpButton);
 }
 
 function bindUi() {
@@ -391,8 +394,8 @@ function sendInput() {
   if (e && (move.x !== 0 || move.z !== 0)) {
     e.yaw = Math.atan2(move.x, move.z);
   }
-  socket.emit('input', { x: move.x, z: move.z, jump: jumpQueued, yaw: e ? e.yaw : 0 });
-  jumpQueued = false;
+  const jumpHeld = !!keys[' '] || touchJumpHeld;
+  socket.emit('input', { x: move.x, z: move.z, jump: jumpHeld, yaw: e ? e.yaw : 0 });
 }
 
 // ---------- loop ----------
