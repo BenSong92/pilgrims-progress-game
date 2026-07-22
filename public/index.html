@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>천로역정: 함께 걷는 순례길</title>
+<link rel="stylesheet" href="style.css" />
+</head>
+<body>
+
+<!-- ===================== 로비 화면 ===================== -->
+<section id="screen-lobby" class="screen">
+  <div class="title-card">
+    <h1>천로역정</h1>
+    <p class="subtitle">함께 걷는 순례길 — 협동 장애물 코스</p>
+    <p class="desc">
+      멸망의 도시를 떠나 낙담의 늪, 좁은 문, 고난의 언덕,<br/>
+      사망의 음침한 골짜기와 허영의 시장을 지나 하늘의 도성까지.<br/>
+      모든 순례자가 도착해야 진짜 승리입니다.
+    </p>
+    <input id="name-input" class="name-input" type="text" maxlength="16" placeholder="순례자의 이름을 입력하세요" />
+    <div class="title-buttons">
+      <button id="btn-join" class="btn primary">순례 시작하기</button>
+    </div>
+    <p id="lobby-status" class="controls-hint"></p>
+    <p class="controls-hint">
+      W/A/S/D 또는 방향키: 이동 &nbsp;·&nbsp; 스페이스바: 점프<br/>
+      마우스 드래그: 시점 회전
+    </p>
+  </div>
+</section>
+
+<!-- ===================== 월드 화면 ===================== -->
+<section id="screen-world" class="screen hidden">
+  <div id="canvas-wrap"></div>
+
+  <header class="world-hud">
+    <div class="zone-label">
+      <div class="game-name">천로역정 · 함께 걷는 순례길</div>
+      <div id="zone-name" class="chapter-label">멸망의 도시</div>
+    </div>
+    <div id="roster" class="roster"></div>
+  </header>
+
+  <div id="fallen-hint" class="interact-hint hidden">깊은 곳에 빠졌습니다... 마지막 경유지에서 다시 시작합니다.</div>
+</section>
+
+<!-- ===================== 승리 화면 ===================== -->
+<div id="victory-overlay" class="journal-panel hidden">
+  <div class="title-card">
+    <h1>하늘의 도성에 도착했습니다</h1>
+    <p class="desc">"내가 선한 싸움을 싸우고 나의 달려갈 길을 마치고 믿음을 지켰으니"</p>
+    <p class="desc">모든 순례자가 함께 도착했습니다. 훌륭합니다!</p>
+  </div>
+</div>
+
+<div id="toast" class="toast"></div>
+
+<script src="https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.min.js"></script>
+<script src="/socket.io/socket.io.js"></script>
+<script src="/shared/level.js"></script>
+<script src="client.js"></script>
+</body>
+</html>
