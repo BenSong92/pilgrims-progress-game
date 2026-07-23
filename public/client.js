@@ -17,6 +17,31 @@ const touchMove = { active: false, ix: 0, iz: 0, pointerId: null };
 const entities = new Map(); // id -> { mesh, name, color, current:{x,y,z}, target:{x,y,z}, yaw }
 const kinematicMeshes = []; // parallel to LEVEL.kinematics
 
+// 구역(체크포인트)마다 하늘/안개/조명을 다르게 해서 천로역정 각 단계의 분위기를 낸다.
+// 구역이 바뀔 때 색이 뚝 끊기지 않도록 loop()에서 매 프레임 targetTheme 쪽으로 서서히 보간한다.
+const ZONE_THEMES = {
+  cp0: { bg: '#c9a876', fogNear: 100, fogFar: 380, hemi: '#fff2df', hemiI: 0.95, sun: '#fff0c8', sunI: 0.9 },
+  cp1: { bg: '#5c6a52', fogNear: 40, fogFar: 170, hemi: '#c9d3b0', hemiI: 0.6, sun: '#dce8c0', sunI: 0.55 },
+  cp2: { bg: '#bcd7ec', fogNear: 110, fogFar: 420, hemi: '#ffffff', hemiI: 1.05, sun: '#ffffff', sunI: 1.0 },
+  cp3: { bg: '#93887a', fogNear: 90, fogFar: 340, hemi: '#e8dcc8', hemiI: 0.85, sun: '#ffe6b8', sunI: 1.05 },
+  cp4: { bg: '#14161e', fogNear: 20, fogFar: 110, hemi: '#3a3f52', hemiI: 0.5, sun: '#5a6a8c', sunI: 0.4 },
+  cp5: { bg: '#c9439a', fogNear: 110, fogFar: 380, hemi: '#ffd7ec', hemiI: 1.05, sun: '#fff0ff', sunI: 1.0 },
+  cpR: { bg: '#1f5a7a', fogNear: 60, fogFar: 260, hemi: '#bfe6ea', hemiI: 0.8, sun: '#dff6ff', sunI: 0.75 },
+  cp6: { bg: '#f3e6ad', fogNear: 130, fogFar: 460, hemi: '#fff8e0', hemiI: 1.2, sun: '#fff6cf', sunI: 1.15 },
+};
+let hemiLight, sunLight;
+let targetTheme = ZONE_THEMES.cp0;
+const colorCache = new Map();
+function cachedColor(hex) {
+  let c = colorCache.get(hex);
+  if (!c) { c = new THREE.Color(hex); colorCache.set(hex, c); }
+  return c;
+}
+function applyZoneTheme(id) {
+  const theme = ZONE_THEMES[id];
+  if (theme) targetTheme = theme;
+}
+
 window.addEventListener('DOMContentLoaded', init);
 
 function init() {
@@ -156,10 +181,11 @@ function initThree() {
   els.canvasWrap.appendChild(renderer.domElement);
   onResize();
 
-  scene.add(new THREE.HemisphereLight(0xffffff, 0x554433, 0.95));
-  const sun = new THREE.DirectionalLight(0xfff3d6, 0.85);
-  sun.position.set(150, 260, 100);
-  scene.add(sun);
+  hemiLight = new THREE.HemisphereLight(0xffffff, 0x554433, 0.95);
+  scene.add(hemiLight);
+  sunLight = new THREE.DirectionalLight(0xfff3d6, 0.85);
+  sunLight.position.set(150, 260, 100);
+  scene.add(sunLight);
 
   renderer.domElement.addEventListener('pointerdown', (e) => {
     if (dragging) return;
@@ -232,6 +258,9 @@ function buildLevelMeshes() {
 
 function buildPieceMesh(piece) {
   const mat = new THREE.MeshLambertMaterial({ color: piece.color || '#8a7a63' });
+  if (piece.motion && piece.motion.type === 'blink') {
+    mat.transparent = true; // 사라지기 직전 경고로 반투명하게 깜빡여야 하므로
+  }
   if (piece.type === 'box' || piece.type === 'bar') {
     return new THREE.Mesh(new THREE.BoxGeometry(piece.size.x, piece.size.y, piece.size.z), mat);
   }
@@ -362,7 +391,10 @@ function onState(data) {
     }
     prevSelfPos = { ...self.pos };
     const cp = LEVEL.checkpoints[self.checkpoint];
-    if (cp) els.zoneName.textContent = cp.label;
+    if (cp) {
+      els.zoneName.textContent = cp.label;
+      applyZoneTheme(cp.id);
+    }
   }
 }
 
@@ -407,11 +439,26 @@ function loop() {
 
     const t = (Date.now() + serverOffset - levelStart) / 1000;
     LEVEL.kinematics.forEach((piece, i) => {
-      const { pos, angle } = LEVEL.kinematicTransform(piece, t);
+      const { pos, angle, warn } = LEVEL.kinematicTransform(piece, t);
       const mesh = kinematicMeshes[i];
       mesh.position.set(pos.x, pos.y, pos.z);
       mesh.rotation.set(angle.x, angle.y, angle.z);
+      if (piece.motion.type === 'blink') {
+        // 사라지기 직전 깜빡이는 경고 — 사라진 뒤에는 위치 자체가 멀리 치워지므로 별도 처리 불필요
+        mesh.material.opacity = warn ? (0.35 + 0.35 * Math.abs(Math.sin(t * 16))) : 1;
+      }
     });
+
+    // 구역 분위기(하늘/안개/조명)를 목표 테마 쪽으로 서서히 보간
+    const themeSmooth = 1 - Math.pow(0.02, dt);
+    scene.background.lerp(cachedColor(targetTheme.bg), themeSmooth);
+    scene.fog.color.copy(scene.background);
+    scene.fog.near += (targetTheme.fogNear - scene.fog.near) * themeSmooth;
+    scene.fog.far += (targetTheme.fogFar - scene.fog.far) * themeSmooth;
+    hemiLight.color.lerp(cachedColor(targetTheme.hemi), themeSmooth);
+    hemiLight.intensity += (targetTheme.hemiI - hemiLight.intensity) * themeSmooth;
+    sunLight.color.lerp(cachedColor(targetTheme.sun), themeSmooth);
+    sunLight.intensity += (targetTheme.sunI - sunLight.intensity) * themeSmooth;
 
     const smooth = 1 - Math.pow(0.001, dt);
     entities.forEach((e) => {
