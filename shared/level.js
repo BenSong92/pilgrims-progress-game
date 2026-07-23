@@ -68,6 +68,9 @@
       id, anchor, name: def.name, chaseRadius: def.chaseRadius || 14,
       patrolRadius: def.patrolRadius || 3, speed: def.speed || 7,
       hitRadius: def.hitRadius || 1.8, color: def.color || '#3a1a1a', scale: def.scale || 1.3,
+      // 부딪혔을 때 밀쳐내는 세기(수평/수직). 기본값은 꽤 강하게(아볼루온 등 "진짜 위협"용) —
+      // 좁은 발판 위의 사자처럼 살짝 겁만 줘야 하는 경우엔 개별적으로 약하게 낮춘다.
+      knockH: def.knockH || 16, knockV: def.knockV || 9,
     });
   }
 
@@ -150,6 +153,10 @@
   // 계단 수를 늘리고 구르는 장애물도 2개→5개로 늘렸다. 사자는 사슬에 묶여 있어(원작처럼)
   // 길 가장자리에 너무 붙지만 않으면 위협 범위가 좁다. 마지막 세 계단은 발판이 좁아지고,
   // 맨 위의 장애물은 예측하기 어려운 리사주 궤적(slide2d)으로 움직인다.
+  // ⚠ 사자는 반드시 굴러오는 장애물(roller)이 없는 계단에 둔다 — 롤러를 피하려고 옆으로
+  // 움직이다가 그대로 사자의 추적 범위에 들어가 버리면(두 위협이 겹치면) 좁은 발판에서
+  // 튕겨나가 도저히 지나갈 수 없는 구간이 되어버린다. 넉백도 사자는 다른 빌런보다 약하게
+  // (좁은 발판에서 밀려나 떨어지지 않도록).
   // =================================================================
   const stepRise = 1.6, stepDepth = 20;
   const hillSteps = 13; // 기존 9 → 10 → 한 단 더
@@ -165,16 +172,16 @@
     } else if (i === 8) {
       hillRollers.push({ x: edge - w / 2, y: y + 2.8, kind: 'slide2d' });
     }
-    if (i === 3) {
-      addVillain('v-lion-1', { x: edge - w / 2, y: y + 1.4, z: 7.5 }, {
-        name: '사슬에 묶인 사자', chaseRadius: 7, patrolRadius: 2, speed: 6,
-        hitRadius: 1.7, color: '#8a6a2e', scale: 1.5,
+    if (i === 0) {
+      addVillain('v-lion-1', { x: edge - w / 2, y: y + 1.4, z: 8 }, {
+        name: '사슬에 묶인 사자', chaseRadius: 5, patrolRadius: 1.5, speed: 6,
+        hitRadius: 1.7, color: '#8a6a2e', scale: 1.5, knockH: 10, knockV: 5,
       });
     }
-    if (i === 7) {
-      addVillain('v-lion-2', { x: edge - w / 2, y: y + 1.4, z: -7.5 }, {
-        name: '사슬에 묶인 사자', chaseRadius: 7, patrolRadius: 2, speed: 6,
-        hitRadius: 1.7, color: '#8a6a2e', scale: 1.5,
+    if (i === 12) {
+      addVillain('v-lion-2', { x: edge - w / 2, y: y + 1.4, z: -8 }, {
+        name: '사슬에 묶인 사자', chaseRadius: 5, patrolRadius: 1.5, speed: 6,
+        hitRadius: 1.7, color: '#8a6a2e', scale: 1.5, knockH: 10, knockV: 5,
       });
     }
   }

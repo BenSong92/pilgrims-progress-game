@@ -299,9 +299,9 @@ function updateVillains(simDt, now) {
       const hitR = v.hitRadius + PLAYER_RADIUS;
       if (dx * dx + dy * dy + dz * dz < hitR * hitR) {
         const d = Math.hypot(dx, dz) || 1;
-        p.body.velocity.x = (dx / d) * 16;
-        p.body.velocity.z = (dz / d) * 16;
-        p.body.velocity.y = 9;
+        p.body.velocity.x = (dx / d) * v.knockH;
+        p.body.velocity.z = (dz / d) * v.knockH;
+        p.body.velocity.y = v.knockV;
         p.invulnerableUntil = now + 1500;
         p.socket.emit('toast', { text: `${v.name}에게 당했습니다!` });
         break;
