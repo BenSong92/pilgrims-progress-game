@@ -50,6 +50,7 @@ function init() {
   bindTouchControls();
   initThree();
   buildLevelMeshes();
+  buildNpcMeshes();
 
   window.addEventListener('keydown', (e) => {
     keys[e.key.toLowerCase()] = true;
@@ -76,6 +77,8 @@ function cacheDom() {
   els.joystickBase = document.getElementById('joystick-base');
   els.joystickKnob = document.getElementById('joystick-knob');
   els.jumpButton = document.getElementById('jump-button');
+  els.questStatus = document.getElementById('quest-status');
+  els.buffStatus = document.getElementById('buff-status');
 }
 
 function bindTouchControls() {
@@ -150,6 +153,16 @@ function joinGame() {
   socket.on('roster', renderRoster);
   socket.on('state', onState);
   socket.on('victory', () => els.victory.classList.remove('hidden'));
+  socket.on('toast', (data) => showToast(data && data.text));
+}
+
+let toastTimer = null;
+function showToast(text) {
+  if (!text) return;
+  els.toast.textContent = text;
+  els.toast.classList.add('show');
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => els.toast.classList.remove('show'), 3200);
 }
 
 function renderRoster(list) {
@@ -332,6 +345,61 @@ function buildPlayerFigure(color) {
   return g;
 }
 
+// ---------- NPC (퀘스트를 주는 원작 등장인물) ----------
+const npcMeshes = new Map(); // id -> { mesh, status, statusSprite }
+
+function buildNpcFigure(npc) {
+  const mesh = buildPlayerFigure(npc.robeColor);
+  const label = makeTextSprite(npc.name, { scale: 1.15, bg: 'rgba(255,243,192,0.92)' });
+  label.position.y = mesh.userData.headTopY + 0.5;
+  mesh.add(label);
+  return mesh;
+}
+
+const NPC_STATUS_ICON = { available: '!', active: '…', completed: '✔' };
+const NPC_STATUS_COLOR = { available: '#ffe066', active: '#8fd3ff', completed: '#8fe38f' };
+
+function setNpcStatus(entry, status) {
+  if (entry.status === status) return;
+  entry.status = status;
+  if (entry.statusSprite) { entry.mesh.remove(entry.statusSprite); entry.statusSprite = null; }
+  const icon = NPC_STATUS_ICON[status];
+  if (!icon) return;
+  const sprite = makeTextSprite(icon, { size: 34, scale: 1.6, bg: NPC_STATUS_COLOR[status], color: '#2a1a06' });
+  sprite.position.y = entry.mesh.userData.headTopY + 1.5;
+  entry.mesh.add(sprite);
+  entry.statusSprite = sprite;
+}
+
+function buildNpcMeshes() {
+  LEVEL.npcs.forEach((npc) => {
+    const mesh = buildNpcFigure(npc);
+    mesh.position.set(npc.pos.x, npc.pos.y, npc.pos.z);
+    scene.add(mesh);
+    npcMeshes.set(npc.id, { mesh, status: null, statusSprite: null });
+  });
+}
+
+// ---------- 빌런 (구간 테마에 맞는 방해꾼 — 서버가 위치를 계산해 상태로 보내준다) ----------
+const villainEntities = new Map(); // id -> { mesh, current:{x,y,z}, target:{x,y,z} }
+
+function ensureVillainEntity(v) {
+  let e = villainEntities.get(v.id);
+  if (!e) {
+    const def = LEVEL.villains.find((d) => d.id === v.id) || {};
+    const mesh = buildPlayerFigure(def.color || '#3a1a1a');
+    mesh.scale.setScalar(def.scale || 1.3);
+    const label = makeTextSprite(def.name || '???', { scale: 1.0, bg: 'rgba(90,10,10,0.85)', color: '#ffe0e0' });
+    label.position.y = mesh.userData.headTopY + 0.5;
+    mesh.add(label);
+    scene.add(mesh);
+    e = { mesh, current: { ...v.pos }, target: { ...v.pos } };
+    villainEntities.set(v.id, e);
+  }
+  e.target.x = v.pos.x; e.target.y = v.pos.y; e.target.z = v.pos.z;
+  return e;
+}
+
 function animateWalk(e, dt) {
   const dx = e.current.x - (e.prevX ?? e.current.x);
   const dz = e.current.z - (e.prevZ ?? e.current.z);
@@ -383,6 +451,8 @@ function onState(data) {
     }
   });
 
+  (data.villains || []).forEach((v) => ensureVillainEntity(v));
+
   const self = data.players.find((p) => p.id === myId);
   if (self) {
     if (prevSelfPos) {
@@ -395,7 +465,41 @@ function onState(data) {
       els.zoneName.textContent = cp.label;
       applyZoneTheme(cp.id);
     }
+    updateQuestHud(self);
+    updateBuffHud(self);
   }
+}
+
+function updateQuestHud(self) {
+  if (self.quest) {
+    const npc = LEVEL.npcs.find((n) => n.id === self.quest.npcId);
+    if (npc) {
+      const remain = Math.max(0, Math.ceil((self.quest.deadline - (Date.now() + serverOffset)) / 1000));
+      els.questStatus.textContent = `${npc.name}: ${npc.questLabel} (${remain}초)`;
+      els.questStatus.classList.remove('hidden');
+    }
+  } else {
+    els.questStatus.classList.add('hidden');
+  }
+  LEVEL.npcs.forEach((npc) => {
+    const entry = npcMeshes.get(npc.id);
+    if (!entry) return;
+    let status = 'available';
+    if (self.completedQuests && self.completedQuests.includes(npc.id)) status = 'completed';
+    else if (self.quest && self.quest.npcId === npc.id) status = 'active';
+    setNpcStatus(entry, status);
+  });
+}
+
+function updateBuffHud(self) {
+  const now = Date.now() + serverOffset;
+  const chips = [];
+  if (self.buffs) {
+    if (self.buffs.speedUntil > now) chips.push(`⚡ 속도 강화 ${Math.ceil((self.buffs.speedUntil - now) / 1000)}초`);
+    if (self.buffs.jumpUntil > now) chips.push(`⬆ 점프 강화 ${Math.ceil((self.buffs.jumpUntil - now) / 1000)}초`);
+    if (self.buffs.shield) chips.push('🛡 천상의 갑주');
+  }
+  els.buffStatus.innerHTML = chips.map((c) => `<span class="buff-chip">${escapeHtml(c)}</span>`).join('');
 }
 
 let fallenTimer = null;
@@ -468,6 +572,17 @@ function loop() {
       e.mesh.position.set(e.current.x, e.current.y, e.current.z);
       e.mesh.rotation.y = e.yaw;
       animateWalk(e, dt);
+    });
+
+    villainEntities.forEach((e) => {
+      e.current.x += (e.target.x - e.current.x) * smooth;
+      e.current.y += (e.target.y - e.current.y) * smooth;
+      e.current.z += (e.target.z - e.current.z) * smooth;
+      const ddx = e.current.x - (e.prevX ?? e.current.x);
+      const ddz = e.current.z - (e.prevZ ?? e.current.z);
+      if (Math.hypot(ddx, ddz) > 0.002) e.mesh.rotation.y = Math.atan2(ddx, ddz);
+      e.mesh.position.set(e.current.x, e.current.y, e.current.z);
+      animateWalk(e, dt); // 내부에서 prevX/prevZ를 이번 프레임 값으로 갱신함
     });
 
     const self = entities.get(myId);

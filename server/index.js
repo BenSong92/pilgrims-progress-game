@@ -117,6 +117,17 @@ function elapsed() { return (Date.now() - levelStart) / 1000; }
 // ---------- checkpoint ordering ----------
 const cpIndex = {};
 LEVEL.checkpoints.forEach((cp, i) => { cpIndex[cp.id] = i; });
+const npcById = {};
+LEVEL.npcs.forEach((n) => { npcById[n.id] = n; });
+
+// ---------- villains (플레이어 위치에 반응하는 AI라 순수 함수로 못 만들고 서버가 직접 계산) ----------
+// 물리 바디 없이(카논 월드에 추가하지 않고) 단순 거리 판정으로만 충돌을 다룬다 — 이전에
+// 겪었던 static/kinematic 바디의 AABB 초기화 문제와 완전히 무관해지고, 훨씬 단순하게 검증할 수 있다.
+const villainStates = LEVEL.villains.map((v) => ({
+  ...v,
+  pos: { x: v.anchor.x, y: v.anchor.y, z: v.anchor.z },
+  patrolPhase: Math.random() * Math.PI * 2,
+}));
 
 // ---------- players ----------
 const players = new Map(); // socketId -> player state
@@ -149,6 +160,7 @@ function createPlayer(socket, name) {
 
   const player = {
     id: socket.id,
+    socket,
     name: name && name.trim() ? name.trim().slice(0, 16) : '순례자',
     color,
     body,
@@ -164,6 +176,15 @@ function createPlayer(socket, name) {
     lastCheckpoint: 'cp0',
     lastCheckpointPos: { ...LEVEL.spawn, y: LEVEL.spawn.y + 2 },
     arrived: false,
+    // ---- 퀘스트 NPC ----
+    quest: null,               // { npcId, deadline } | null
+    completedQuests: new Set(),
+    // ---- 보상 버프 ----
+    buffSpeedMult: 1, buffSpeedUntil: 0,
+    buffJumpMult: 1, buffJumpUntil: 0,
+    shield: false,
+    // ---- 빌런 피격 무적 시간 ----
+    invulnerableUntil: 0,
   };
   players.set(socket.id, player);
   return player;
@@ -188,6 +209,105 @@ function isGrounded(body) {
   const result = new CANNON.RaycastResult();
   world.raycastClosest(from, to, { collisionFilterMask: GROUP_GROUND }, result);
   return result.hasHit;
+}
+
+function applyReward(p, npc) {
+  const now = Date.now();
+  if (npc.rewardType === 'speed') {
+    p.buffSpeedMult = npc.rewardValue;
+    p.buffSpeedUntil = now + npc.rewardDuration;
+  } else if (npc.rewardType === 'jump') {
+    p.buffJumpMult = npc.rewardValue;
+    p.buffJumpUntil = now + npc.rewardDuration;
+  } else if (npc.rewardType === 'shield') {
+    p.shield = true;
+  }
+  p.socket.emit('toast', { text: `${npc.name}에게서 보상을 받았습니다: ${npc.rewardLabel}` });
+}
+
+// ---------- 퀘스트: NPC 근처에 가면 자동 수락, 목표 체크포인트에 제한시간 안에 닿으면 완료 ----------
+function updateQuests(now) {
+  players.forEach((p) => {
+    // 자동 수락: 진행 중인 퀘스트가 없고, 아직 깬 적 없는 NPC 근처면 시작
+    if (!p.quest) {
+      for (const npc of LEVEL.npcs) {
+        if (p.completedQuests.has(npc.id)) continue;
+        const dx = p.body.position.x - npc.pos.x;
+        const dz = p.body.position.z - npc.pos.z;
+        if (Math.hypot(dx, dz) < npc.radius) {
+          p.quest = { npcId: npc.id, deadline: now + npc.timeLimit * 1000 };
+          p.socket.emit('toast', { text: `${npc.name}: ${npc.questLabel}` });
+          break;
+        }
+      }
+    }
+    if (p.quest) {
+      const npc = npcById[p.quest.npcId];
+      if (!npc) { p.quest = null; return; }
+      if (cpIndex[p.lastCheckpoint] >= cpIndex[npc.targetCpId]) {
+        p.completedQuests.add(npc.id);
+        applyReward(p, npc);
+        p.quest = null;
+      } else if (now > p.quest.deadline) {
+        p.socket.emit('toast', { text: `${npc.name}의 퀘스트에 실패했습니다 — 다시 찾아가면 재도전할 수 있습니다.` });
+        p.quest = null;
+      }
+    }
+  });
+}
+
+// ---------- 빌런 AI: anchor 주변을 서성이다 플레이어가 가까이 오면 쫓아온다 ----------
+function updateVillains(simDt, now) {
+  villainStates.forEach((v) => {
+    let nearest = null, nearestDist = Infinity;
+    players.forEach((p) => {
+      const dx = p.body.position.x - v.anchor.x;
+      const dz = p.body.position.z - v.anchor.z;
+      if (Math.hypot(dx, dz) < v.chaseRadius) {
+        const pd = Math.hypot(p.body.position.x - v.pos.x, p.body.position.z - v.pos.z);
+        if (pd < nearestDist) { nearestDist = pd; nearest = p; }
+      }
+    });
+    if (nearest) {
+      const dx = nearest.body.position.x - v.pos.x;
+      const dz = nearest.body.position.z - v.pos.z;
+      const d = Math.hypot(dx, dz) || 1;
+      const step = Math.min(d, v.speed * simDt);
+      v.pos.x += (dx / d) * step;
+      v.pos.z += (dz / d) * step;
+    } else {
+      v.patrolPhase += simDt * 0.6;
+      v.pos.x = v.anchor.x + Math.sin(v.patrolPhase) * v.patrolRadius;
+      v.pos.z = v.anchor.z + Math.cos(v.patrolPhase * 0.7) * v.patrolRadius;
+    }
+    // 리쉬: anchor에서 chaseRadius*1.15보다 멀어지지 않도록 고정
+    const ax = v.pos.x - v.anchor.x, az = v.pos.z - v.anchor.z;
+    const ad = Math.hypot(ax, az);
+    const leash = v.chaseRadius * 1.15;
+    if (ad > leash) {
+      v.pos.x = v.anchor.x + (ax / ad) * leash;
+      v.pos.z = v.anchor.z + (az / ad) * leash;
+    }
+  });
+
+  players.forEach((p) => {
+    if (now < p.invulnerableUntil) return;
+    for (const v of villainStates) {
+      const dx = p.body.position.x - v.pos.x;
+      const dy = p.body.position.y - v.pos.y;
+      const dz = p.body.position.z - v.pos.z;
+      const hitR = v.hitRadius + PLAYER_RADIUS;
+      if (dx * dx + dy * dy + dz * dz < hitR * hitR) {
+        const d = Math.hypot(dx, dz) || 1;
+        p.body.velocity.x = (dx / d) * 16;
+        p.body.velocity.z = (dz / d) * 16;
+        p.body.velocity.y = 9;
+        p.invulnerableUntil = now + 1500;
+        p.socket.emit('toast', { text: `${v.name}에게 당했습니다!` });
+        break;
+      }
+    }
+  });
 }
 
 let victoryFired = false;
@@ -268,8 +388,9 @@ setInterval(() => {
     }
     p.prevInputJump = p.input.jump;
 
-    p.body.velocity.x = p.input.x * MAX_SPEED;
-    p.body.velocity.z = p.input.z * MAX_SPEED;
+    const speedMult = now < p.buffSpeedUntil ? p.buffSpeedMult : 1;
+    p.body.velocity.x = p.input.x * MAX_SPEED * speedMult;
+    p.body.velocity.z = p.input.z * MAX_SPEED * speedMult;
 
     const withinCoyote = now - p.lastGroundedAt <= COYOTE_MS;
     // 지금 누르고 있거나(착지 전부터 계속 누르고 있던 경우 포함), 착지 직전에 눌렀던 입력이 버퍼 시간 안이면 점프 요청으로 간주
@@ -278,7 +399,8 @@ setInterval(() => {
     const cooldownOk = now - (p.lastJumpFiredAt || 0) >= MIN_JUMP_INTERVAL_MS;
 
     if (withinCoyote && jumpRequested && !p.jumpFiredThisContact && cooldownOk) {
-      p.body.velocity.y = JUMP_SPEED;
+      const jumpMult = now < p.buffJumpUntil ? p.buffJumpMult : 1;
+      p.body.velocity.y = JUMP_SPEED * jumpMult;
       p.jumpFiredThisContact = true;  // 같은 접지 구간에서 중복 발사 방지
       p.lastJumpFiredAt = now;
       p.jumpBufferedAt = -Infinity;   // 점프 소비
@@ -299,13 +421,21 @@ setInterval(() => {
   });
 
   world.step(DT, timeSinceLastCalled, 5);
+  updateVillains(simDt, now);
 
   players.forEach((p) => {
-    // 낙사 처리
+    // 낙사 처리 — 보호막이 있으면 체크포인트까지 되돌리지 않고 떨어진 자리 위로 붙잡아준다
     if (p.body.position.y < LEVEL.fallY) {
-      const rp = p.lastCheckpointPos;
-      p.body.position.set(rp.x, rp.y, rp.z);
-      p.body.velocity.set(0, 0, 0);
+      if (p.shield) {
+        p.shield = false;
+        p.body.position.y = LEVEL.fallY + 20;
+        p.body.velocity.set(0, 0, 0);
+        p.socket.emit('toast', { text: '천상의 갑주가 낙사를 막아주었습니다!' });
+      } else {
+        const rp = p.lastCheckpointPos;
+        p.body.position.set(rp.x, rp.y, rp.z);
+        p.body.velocity.set(0, 0, 0);
+      }
     }
 
     // 체크포인트 갱신 (앞으로만 전진)
@@ -332,6 +462,8 @@ setInterval(() => {
     }
   });
 
+  updateQuests(now); // 체크포인트가 이번 틱에 갱신된 뒤에 검사해야 도착 즉시 완료 판정이 됨
+
   io.emit('state', {
     serverNow: Date.now(),
     players: Array.from(players.values()).map((p) => ({
@@ -342,7 +474,15 @@ setInterval(() => {
       yaw: p.yaw,
       checkpoint: cpIndex[p.lastCheckpoint],
       arrived: p.arrived,
+      quest: p.quest ? { npcId: p.quest.npcId, deadline: p.quest.deadline } : null,
+      completedQuests: Array.from(p.completedQuests),
+      buffs: {
+        speedUntil: p.buffSpeedUntil,
+        jumpUntil: p.buffJumpUntil,
+        shield: p.shield,
+      },
     })),
+    villains: villainStates.map((v) => ({ id: v.id, pos: v.pos })),
   });
 }, 1000 / TICK_RATE);
 

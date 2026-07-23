@@ -8,7 +8,7 @@
 //   => 정점 높이 3.5, 체공시간 1.0s, 최대 수평 도달거리 15
 // 안전 마진을 위해 실제 간격은 이보다 훨씬 여유있게 설계한다
 //   (같은 높이 점프 간격 ≤ 8, 단차 ≤ 2.0).
-// ⚠ 아래에서 스테이지가 진행될수록 난이도를 올릴 때도 이 상한선(간격 ≤8, 단차 ≤2.0)은
+// ⚠ 스테이지가 진행될수록 난이도를 올릴 때도 이 상한선(간격 ≤8, 단차 ≤2.0)은
 //   절대 넘기지 않는다 — "어렵게"는 발판 크기 축소/속도 증가/장애물 수 증가/시야 축소로만
 //   구현하고, 점프 자체가 불가능해지는 거리로는 만들지 않는다.
 //
@@ -17,6 +17,16 @@
 //   발판용), orbit(중심점 둘레를 원으로 공전 — 필요하면 y도 함께 출렁임), blink(주기적으로
 //   멀리 치워져 충돌/시야에서 완전히 사라졌다가 다시 나타남 — 사라지기 직전 warnDuration
 //   동안 warn=true를 반환해 클라이언트가 깜빡임 경고를 보여줄 수 있게 한다).
+//
+// npcs: 퀘스트를 주는 원작 등장인물(해석자, 빛나는 자, 신실한 자 등). 근처에 가면 자동으로
+//   퀘스트가 시작되고("다음 경유지까지 시간 안에 도착"), 제한 시간 안에 목표 체크포인트에
+//   닿으면 보상(속도/점프 강화, 낙사 방지막)을 받는다. 위치·판정은 서버가 관리하고, 텍스트
+//   라벨은 클라이언트가 이 배열에서 그대로 읽어 쓴다.
+// villains: 각 구간 테마에 맞는 방해꾼(베엘제붑의 파수꾼, 사슬에 묶인 사자, 아볼루온, 허영의
+//   시장 폭도). anchor 주변을 서성이다가 플레이어가 chaseRadius 안에 들어오면 쫓아오고,
+//   부딪히면 밀쳐낸다(낙사로 이어질 수 있음). anchor에서 너무 멀어지지 않도록 리쉬가 걸려있다.
+//   위치는 서버가 매 틱 계산해 상태 브로드캐스트로 보내준다(시간만의 순수 함수가 아니라
+//   플레이어 위치에 반응해야 하므로 kinematics와는 별도로 다룬다).
 // ============================================================
 
 (function (root, factory) {
@@ -30,6 +40,8 @@
   const statics = [];
   const kinematics = [];
   const checkpoints = [];
+  const npcs = [];
+  const villains = [];
   let sid = 0, kid = 0;
 
   function addStatic(type, pos, size, color) {
@@ -42,6 +54,21 @@
   }
   function addCheckpoint(id, pos, radius, label) {
     checkpoints.push({ id, pos, radius, label });
+  }
+  function addNpc(id, pos, def) {
+    npcs.push({
+      id, pos, radius: def.radius || 4.5, name: def.name, role: def.role,
+      questLabel: def.questLabel, targetCpId: def.targetCpId, timeLimit: def.timeLimit,
+      rewardType: def.rewardType, rewardValue: def.rewardValue, rewardDuration: def.rewardDuration,
+      rewardLabel: def.rewardLabel, robeColor: def.robeColor || '#e9d38a',
+    });
+  }
+  function addVillain(id, anchor, def) {
+    villains.push({
+      id, anchor, name: def.name, chaseRadius: def.chaseRadius || 14,
+      patrolRadius: def.patrolRadius || 3, speed: def.speed || 7,
+      hitRadius: def.hitRadius || 1.8, color: def.color || '#3a1a1a', scale: def.scale || 1.3,
+    });
   }
 
   // x축을 따라 왼쪽 끝(edge) 좌표를 계속 갱신하며 이어붙인다.
@@ -66,11 +93,11 @@
   // 뒤로 갈수록 발판이 좁아지고(정밀도 요구 증가) 더 빨리/크게 출렁인다(타이밍 요구 증가).
   // 좌우 지그재그 폭(±3.2)과 점프 간격 상한(≤6.5)은 안전을 위해 고정.
   // =================================================================
-  addStatic('plane_hazard', { x: edge + 62, y: y - 7, z: 0 }, { x: 140, y: 1, z: 30 }, '#4a3d2a');
+  addStatic('plane_hazard', { x: edge + 75, y: y - 7, z: 0 }, { x: 165, y: 1, z: 30 }, '#4a3d2a');
   const stoneW0 = 5, stoneWMin = 4.4;
   const stoneGap0 = 5.0, stoneGapMax = 6.2; // 검증된 안전 반경(≤8) 안에서만 넓어짐
   edge += 4; // 첫 디딤돌까지 약간의 助走 간격
-  const sloughStones = 12; // 기존 10개 → 늪을 더 길고 힘겹게
+  const sloughStones = 15; // 기존 10개 → 12개 → 늪을 더 길고 힘겹게
   for (let i = 0; i < sloughStones; i++) {
     const prog = i / (sloughStones - 1);
     const ease = Math.pow(prog, 1.6); // 초반은 원래 난이도만큼 여유있게, 후반에 몰아서 어려워짐
@@ -91,9 +118,14 @@
 
   // =================================================================
   // ZONE C — 좁은 문 (Wicket Gate)
-  // 문에 이르기 전에 서로 다른 박자로 흔들리는 장대 2개를 연달아 통과해야 한다.
+  // 문에 이르기 전에 베엘제붑의 파수꾼을 피하고, 서로 다른 박자로 흔들리는 장대 2개를
+  // 연달아 통과해야 한다.
   // =================================================================
   platform(52, 24, '#8a7a63');
+  addVillain('v-beelzebub', { x: edge - 44, y: y + 1.4, z: 5 }, {
+    name: '베엘제붑의 파수꾼', chaseRadius: 17, patrolRadius: 5, speed: 8.5,
+    hitRadius: 1.9, color: '#241018', scale: 1.35,
+  });
   const gateX = edge - 20;
   addStatic('box', { x: gateX, y: y + 6, z: -4.2 }, { x: 3, y: 12, z: 2.4 }, '#4a3f33');
   addStatic('box', { x: gateX, y: y + 6, z: 4.2 }, { x: 3, y: 12, z: 2.4 }, '#4a3f33');
@@ -105,25 +137,45 @@
     type: 'pendulum', amplitude: 0.75, speed: 1.4, phase: 0, pivot: 'x',
   });
   addCheckpoint('cp2', { x: edge - 7, y: y + 1, z: 0 }, 7, '좁은 문을 지나다');
+  addNpc('npc-interpreter', { x: edge - 4, y: y + 1, z: 6.5 }, {
+    name: '해석자', role: '해석자의 집',
+    questLabel: '고난의 언덕 정상까지 30초 안에 도착하세요',
+    targetCpId: 'cp3', timeLimit: 30,
+    rewardType: 'speed', rewardValue: 1.35, rewardDuration: 14000,
+    rewardLabel: '민첩함의 축복 (14초간 이동속도 상승)', robeColor: '#7a5a2e',
+  });
 
   // =================================================================
-  // ZONE D — 고난의 언덕 (Hill Difficulty) : 계단 + 굴러오는 장애물
-  // 계단 수를 늘리고 구르는 장애물도 2개→4개로 늘렸다. 마지막 두 계단은 발판이 좁아지고,
+  // ZONE D — 고난의 언덕 (Hill Difficulty) : 계단 + 굴러오는 장애물 + 사슬에 묶인 사자
+  // 계단 수를 늘리고 구르는 장애물도 2개→5개로 늘렸다. 사자는 사슬에 묶여 있어(원작처럼)
+  // 길 가장자리에 너무 붙지만 않으면 위협 범위가 좁다. 마지막 세 계단은 발판이 좁아지고,
   // 맨 위의 장애물은 예측하기 어려운 리사주 궤적(slide2d)으로 움직인다.
   // =================================================================
   const stepRise = 1.6, stepDepth = 20;
-  const hillSteps = 10; // 기존 9 → 한 칸 더
+  const hillSteps = 13; // 기존 9 → 10 → 한 단 더
   const stepW = 9, stepWNarrow = 7;
   const hillRollers = [];
   for (let i = 0; i < hillSteps; i++) {
-    const narrowed = i >= hillSteps - 2;
+    const narrowed = i >= hillSteps - 3;
     const w = narrowed ? stepWNarrow : stepW;
     platform(w, stepDepth, '#7a6a52');
     y += stepRise;
-    if (i === 2 || i === 4 || i === 6) {
+    if (i === 2 || i === 4 || i === 6 || i === 10) {
       hillRollers.push({ x: edge - w / 2, y: y + 2.5, kind: 'slide' });
     } else if (i === 8) {
       hillRollers.push({ x: edge - w / 2, y: y + 2.8, kind: 'slide2d' });
+    }
+    if (i === 3) {
+      addVillain('v-lion-1', { x: edge - w / 2, y: y + 1.4, z: 7.5 }, {
+        name: '사슬에 묶인 사자', chaseRadius: 7, patrolRadius: 2, speed: 6,
+        hitRadius: 1.7, color: '#8a6a2e', scale: 1.5,
+      });
+    }
+    if (i === 7) {
+      addVillain('v-lion-2', { x: edge - w / 2, y: y + 1.4, z: -7.5 }, {
+        name: '사슬에 묶인 사자', chaseRadius: 7, patrolRadius: 2, speed: 6,
+        hitRadius: 1.7, color: '#8a6a2e', scale: 1.5,
+      });
     }
   }
   hillRollers.forEach((r, i) => {
@@ -139,15 +191,22 @@
   });
   platform(16, 22, '#8a7a63');
   addCheckpoint('cp3', { x: edge - 8, y: y + 1, z: 0 }, 8, '고난의 언덕을 오르다');
+  addNpc('npc-shining-one', { x: edge - 4, y: y + 1, z: 6.5 }, {
+    name: '빛나는 자', role: '갑주를 내리는 천사',
+    questLabel: '음침한 골짜기를 지나 반대편까지 35초 안에 도착하세요',
+    targetCpId: 'cp4', timeLimit: 35,
+    rewardType: 'shield', rewardValue: 1, rewardDuration: 0,
+    rewardLabel: '천상의 갑주 (다음 낙사 1회를 막아줍니다)', robeColor: '#fff3c0',
+  });
 
   // =================================================================
   // ZONE E — 사망의 음침한 골짜기 (Valley of the Shadow of Death)
-  // 좁고 어두운 다리: 회전하는 낫 모양 장대 5개(기존 3개) + 다리 중간에 주기적으로
-  // 완전히 사라졌다 나타나는 발판(blink) 구간. 시야/조명은 client.js의 ZONE_THEMES에서
-  // 가장 어둡게 처리해 "음침한 골짜기"의 공포감을 살린다.
+  // 좁고 어두운 다리: 회전하는 낫 모양 장대 5개→7개 + 다리 중간에 주기적으로 완전히
+  // 사라졌다 나타나는 발판(blink) 구간 + 파괴자 아볼루온의 습격. 시야/조명은
+  // client.js의 ZONE_THEMES에서 가장 어둡게 처리해 "음침한 골짜기"의 공포감을 살린다.
   // =================================================================
   const bridgeStart = edge;
-  addStatic('plane_hazard', { x: bridgeStart + 42, y: y - 7, z: 0 }, { x: 100, y: 1, z: 26 }, '#0a0a0f');
+  addStatic('plane_hazard', { x: bridgeStart + 59, y: y - 7, z: 0 }, { x: 135, y: 1, z: 26 }, '#0a0a0f');
   platform(34, 4.2, '#232019');
   addKinematic('bar', { x: bridgeStart + 10, y: y + 1.5, z: 0 }, { x: 1, y: 1, z: 8 }, '#8c3b2e', {
     type: 'rotorY', speed: 1.0, phase: 0,
@@ -172,13 +231,33 @@
   addKinematic('bar', { x: bridgeStart + 76, y: y + 1.6, z: 0 }, { x: 1, y: 1, z: 8 }, '#8c3b2e', {
     type: 'rotorY', speed: 1.6, phase: 2.6,
   });
+  addVillain('v-apollyon', { x: bridgeStart + 68, y: y + 1.6, z: 0 }, {
+    name: '아볼루온', chaseRadius: 24, patrolRadius: 6, speed: 10,
+    hitRadius: 2.4, color: '#5a0a0a', scale: 1.9,
+  });
+  edge += 40;
+  platform(34, 4.2, '#232019');
+  addKinematic('bar', { x: bridgeStart + 92, y: y + 1.5, z: 0 }, { x: 1, y: 1, z: 8 }, '#8c3b2e', {
+    type: 'rotorY', speed: 1.7, phase: 1.6,
+  });
+  addKinematic('bar', { x: bridgeStart + 106, y: y + 1.7, z: 0 }, { x: 1, y: 1, z: 9 }, '#8c3b2e', {
+    type: 'rotorY', speed: 1.85, phase: 3.0,
+  });
   platform(16, 22, '#8a7a63');
   addCheckpoint('cp4', { x: edge - 8, y: y + 1, z: 0 }, 8, '음침한 골짜기를 지나다');
+  addNpc('npc-faithful', { x: edge - 4, y: y + 1, z: 6.5 }, {
+    name: '신실한 자', role: '동행자',
+    questLabel: '허영의 시장을 벗어날 때까지 40초 안에 도착하세요',
+    targetCpId: 'cp5', timeLimit: 40,
+    rewardType: 'jump', rewardValue: 1.3, rewardDuration: 14000,
+    rewardLabel: '용기의 축복 (14초간 점프력 상승)', robeColor: '#4a7a5a',
+  });
 
   // =================================================================
-  // ZONE F — 허영의 시장 (Vanity Fair) : 내려가는 계단 + 회전 무대 + 곡예 그네
-  // 회전 발판을 3개→4개로 늘리고 방향을 번갈아 바꿨다. 각 발판 위에는 반대로 도는
-  // 곡예 그네(orbit)가 있어 회전판 위에서 균형을 잡으면서 동시에 피해야 한다.
+  // ZONE F — 허영의 시장 (Vanity Fair) : 내려가는 계단 + 회전 무대 + 곡예 그네 + 폭도
+  // 회전 발판을 3개→4개→6개로 늘리고 방향을 번갈아 바꿨다. 각 발판 위에는 반대로 도는
+  // 곡예 그네(orbit)가 있어 회전판 위에서 균형을 잡으면서 동시에 피해야 하고, 시장 폭도가
+  // 돌아다니며 순례자를 밀쳐낸다.
   // =================================================================
   const fairSteps = 4;
   for (let i = 0; i < fairSteps; i++) {
@@ -188,7 +267,7 @@
   platform(14, 24, '#c9a53f');
   const carouselGap = 6.5, carouselR = 6.5;
   const carouselColors = ['#c9527a', '#4fa9c9', '#e0b23a', '#8e5ac9'];
-  const fairCarousels = 4; // 기존 3개
+  const fairCarousels = 6; // 기존 3개 → 4개 → 6개
   for (let i = 0; i < fairCarousels; i++) {
     edge += carouselGap;
     const cx = edge + carouselR;
@@ -199,6 +278,12 @@
     addKinematic('sphere', { x: cx, y: y + 2.6, z: 0 }, { r: 1.1 }, '#3a2a1a', {
       type: 'orbit', radius: carouselR * 0.8, speed: -dir * (1.3 + i * 0.2), phase: i * 0.9,
     });
+    if (i === 3) {
+      addVillain('v-mob', { x: cx, y: y + 1.4, z: 0 }, {
+        name: '허영의 시장 폭도', chaseRadius: 20, patrolRadius: 8, speed: 9,
+        hitRadius: 1.8, color: '#4a2a4a', scale: 1.3,
+      });
+    }
     edge += carouselR * 2;
   }
   edge += carouselGap;
@@ -207,13 +292,13 @@
 
   // =================================================================
   // ZONE G — 죽음의 강 / 요단강 (The River) : 점점 작아지고 빨라지는 연잎 + 떠내려오는 통나무
-  // 발판 수를 8개→10개로 늘리고, 갈수록 반지름이 작아진다(점프 간격 자체는 고정해 안전 유지).
+  // 발판 수를 8개→10개→14개로 늘리고, 갈수록 반지름이 작아진다(점프 간격 자체는 고정해 안전 유지).
   // 강 한복판에는 원 궤도로 도는 통나무가 있어 마지막 시험답게 타이밍 회피가 필요하다.
   // =================================================================
-  addStatic('plane_hazard', { x: edge + 50, y: y - 7, z: 0 }, { x: 110, y: 1, z: 28 }, '#1c4a63');
+  addStatic('plane_hazard', { x: edge + 70, y: y - 7, z: 0 }, { x: 155, y: 1, z: 28 }, '#1c4a63');
   const padGap = 6.5; // 안전 반경(≤8) 안에서 고정 — 난이도는 발판 크기/속도로만 올린다
   edge += 4;
-  const lilypads = 10; // 기존 8개
+  const lilypads = 14; // 기존 8개 → 10개 → 14개
   for (let i = 0; i < lilypads; i++) {
     const prog = i / (lilypads - 1);
     const padRi = 3.0 - 0.7 * prog; // 갈수록 발판이 작아짐
@@ -222,9 +307,9 @@
     addKinematic('cylinder', { x, y, z }, { r: padRi, h: 0.8 }, '#2f7a4e', {
       type: 'bob', amplitude: 0.3 + prog * 0.35, speed: 1.5 + prog * 0.9, phase: i * 0.9, axis: 'y',
     });
-    if (i === 5) {
+    if (i === 5 || i === 10) {
       addKinematic('sphere', { x: x + padRi + 3, y: y + 1.4, z: 0 }, { r: 1.6 }, '#4a3a22', {
-        type: 'orbit', radius: 5.5, speed: 1.1, phase: 0,
+        type: 'orbit', radius: 5.5, speed: 1.1 + (i === 10 ? 0.3 : 0), phase: i === 10 ? 1.6 : 0,
       });
     }
     edge += padRi * 2 + padGap;
@@ -251,6 +336,8 @@
   // 모든 클라이언트/서버가 공통으로 사용하는 위치 계산 함수.
   // t = 레벨 시작 이후 경과 시간(초). 순수 함수 — 항상 서버와 동일한 결과.
   // visible/warn은 blink 타입에서만 의미가 있다(그 외 타입은 항상 visible=true, warn=false).
+  // (villains는 플레이어 위치에 반응하는 AI라 순수 함수로 표현할 수 없어 서버가 매 틱
+  //  직접 계산해서 상태 브로드캐스트로 위치를 보내준다 — 여기 포함하지 않는다.)
   // ---------------------------------------------------------------
   function kinematicTransform(piece, t) {
     const m = piece.motion;
@@ -289,5 +376,5 @@
     return { pos, angle, visible, warn };
   }
 
-  return { spawn, fallY, statics, kinematics, checkpoints, goal, kinematicTransform };
+  return { spawn, fallY, statics, kinematics, checkpoints, npcs, villains, goal, kinematicTransform };
 });

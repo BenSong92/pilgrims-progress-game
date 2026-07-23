@@ -65,6 +65,16 @@ html, body {
 .world-hud > * { pointer-events: auto; }
 .game-name { font-size: 13px; color: var(--sand-1); opacity: 0.75; letter-spacing: 1px; text-shadow: 0 1px 4px rgba(0,0,0,0.6); }
 .chapter-label { font-size: 20px; font-weight: 700; color: var(--gold); text-shadow: 0 1px 6px rgba(0,0,0,0.7); }
+.quest-status {
+  margin-top: 6px; font-size: 12.5px; font-weight: 700; color: #fce9bb;
+  background: rgba(140,59,46,0.65); border-radius: 8px; padding: 5px 10px;
+  display: inline-block; text-shadow: none;
+}
+.buff-status { margin-top: 6px; display: flex; gap: 6px; }
+.buff-chip {
+  font-size: 12px; font-weight: 700; color: #2a1a06; background: var(--gold);
+  border-radius: 8px; padding: 4px 9px; box-shadow: 0 2px 6px rgba(0,0,0,0.35);
+}
 
 .roster {
   display: flex; flex-direction: column; gap: 6px;
