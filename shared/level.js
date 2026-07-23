@@ -264,7 +264,7 @@
   // ZONE F — 허영의 시장 (Vanity Fair) : 내려가는 계단 + 회전 무대 + 곡예 그네 + 폭도
   // 회전 발판을 3개→4개→6개로 늘리고 방향을 번갈아 바꿨다. 각 발판 위에는 반대로 도는
   // 곡예 그네(orbit)가 있어 회전판 위에서 균형을 잡으면서 동시에 피해야 하고, 시장 폭도가
-  // 돌아다니며 순례자를 밀쳐낸다.
+  // 돌아다니며 순례자를 밀쳐낸다. 회전판/그네 속도를 한 단계 더 빠르게 올렸다(카니발다운 어지러움).
   // =================================================================
   const fairSteps = 4;
   for (let i = 0; i < fairSteps; i++) {
@@ -280,10 +280,10 @@
     const cx = edge + carouselR;
     const dir = (i % 2 === 0) ? 1 : -1;
     addKinematic('cylinder', { x: cx, y, z: 0 }, { r: carouselR, h: 1 }, carouselColors[i % carouselColors.length], {
-      type: 'carousel', speed: dir * (0.8 + i * 0.18), phase: i * 1.3,
+      type: 'carousel', speed: dir * (1.2 + i * 0.25), phase: i * 1.3,
     });
     addKinematic('sphere', { x: cx, y: y + 2.6, z: 0 }, { r: 1.1 }, '#3a2a1a', {
-      type: 'orbit', radius: carouselR * 0.8, speed: -dir * (1.3 + i * 0.2), phase: i * 0.9,
+      type: 'orbit', radius: carouselR * 0.8, speed: -dir * (1.9 + i * 0.3), phase: i * 0.9,
     });
     if (i === 3) {
       addVillain('v-mob', { x: cx, y: y + 1.4, z: 0 }, {

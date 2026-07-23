@@ -83,16 +83,23 @@ function makeStaticBody(piece) {
   return body;
 }
 
+// 'bar'(진자/회전 장대)와 'sphere'(롤러, 궤도 장애물)는 카논 물리 바디를 만들지 않는다 —
+// 우리 이동 모델은 매 틱 velocity.x/z를 입력값으로 강제 지정하는데, 빠르게 움직이는
+// kinematic 바디에 대한 카논의 충돌 반응(밀어내기)이 바로 다음 틱에 그 강제 지정으로
+// 덮어써져 사실상 무력화된다 — 실제로 최소 재현 스크립트로 "플레이어가 롤러를 그냥
+// 뚫고 지나가는" 것을 확인했다("장애물이 그냥 통과된다"는 버그 리포트의 원인).
+// 대신 아래 updateHazards()에서 매 틱 순수 거리 계산으로 직접 충돌/넉백을 처리한다
+// (이미 검증된 빌런 시스템과 동일한 패턴). 'box'/'cylinder'(발판류 — 늪 디딤돌, 회전
+// 무대, 연잎 등 위에 올라서는 것들)는 그대로 카논 물리를 쓴다 — 수직으로 서있는
+// 상호작용은 별도 테스트로 정상 작동을 확인했고, 굳이 바꿀 이유가 없다.
 function makeKinematicBody(piece) {
   let shape;
-  if (piece.type === 'box' || piece.type === 'bar') {
+  if (piece.type === 'box') {
     shape = new CANNON.Box(new CANNON.Vec3(piece.size.x / 2, piece.size.y / 2, piece.size.z / 2));
-  } else if (piece.type === 'sphere') {
-    shape = new CANNON.Sphere(piece.size.r);
   } else if (piece.type === 'cylinder') {
     shape = new CANNON.Cylinder(piece.size.r, piece.size.r, piece.size.h, 16);
   } else {
-    return null;
+    return null; // bar, sphere 등은 아래 hazardKinematics에서 별도 처리
   }
   const body = new CANNON.Body({
     mass: 0,
@@ -110,6 +117,55 @@ function makeKinematicBody(piece) {
 
 LEVEL.statics.forEach((p) => { p.body = makeStaticBody(p); });
 LEVEL.kinematics.forEach((p) => { p.body = makeKinematicBody(p); });
+
+// 순수 거리 계산으로 직접 충돌을 처리하는 "위험물" 종류 (bar: 회전/진자 장대, sphere: 롤러·궤도 장애물)
+const hazardKinematics = LEVEL.kinematics.filter((p) => p.type === 'bar' || p.type === 'sphere');
+const HAZARD_KNOCK_H = 12, HAZARD_KNOCK_V = 6; // 빌런보다는 약하게 — 성난 몬스터가 아니라 환경 장애물이므로
+const _hazardQ = new CANNON.Quaternion();
+const _hazardRel = new CANNON.Vec3();
+
+// box(회전/진자 장대)는 회전을 고려해 로컬 좌표계로 변환한 뒤 가장 가까운 점을 구하고,
+// sphere(롤러 등)는 단순 중심간 거리로 판정한다.
+function hazardHitDistSq(piece, pos, angle, playerPos) {
+  if (piece.type === 'sphere') {
+    const dx = playerPos.x - pos.x, dy = playerPos.y - pos.y, dz = playerPos.z - pos.z;
+    const r = piece.size.r + PLAYER_RADIUS;
+    const distSq = dx * dx + dy * dy + dz * dz;
+    return { hit: distSq < r * r, pushX: dx, pushZ: dz };
+  }
+  // bar: 회전된 박스 — 플레이어 위치를 박스의 로컬 좌표계로 변환
+  _hazardQ.setFromEuler(angle.x, angle.y, angle.z);
+  _hazardRel.set(playerPos.x - pos.x, playerPos.y - pos.y, playerPos.z - pos.z);
+  const local = _hazardQ.inverse().vmult(_hazardRel);
+  const hx = piece.size.x / 2, hy = piece.size.y / 2, hz = piece.size.z / 2;
+  const cx = Math.max(-hx, Math.min(hx, local.x));
+  const cy = Math.max(-hy, Math.min(hy, local.y));
+  const cz = Math.max(-hz, Math.min(hz, local.z));
+  const dx = local.x - cx, dy = local.y - cy, dz = local.z - cz;
+  const distSq = dx * dx + dy * dy + dz * dz;
+  if (distSq >= PLAYER_RADIUS * PLAYER_RADIUS) return { hit: false };
+  // 가장 가까운 점을 다시 월드 좌표로 돌려서 미는 방향을 구한다
+  const closestWorld = _hazardQ.vmult(new CANNON.Vec3(cx, cy, cz));
+  return { hit: true, pushX: playerPos.x - (pos.x + closestWorld.x), pushZ: playerPos.z - (pos.z + closestWorld.z) };
+}
+
+function updateHazards(t, now) {
+  players.forEach((p) => {
+    if (now < p.invulnerableUntil) return;
+    for (const piece of hazardKinematics) {
+      const { pos, angle } = LEVEL.kinematicTransform(piece, t);
+      const result = hazardHitDistSq(piece, pos, angle, p.body.position);
+      if (result.hit) {
+        const d = Math.hypot(result.pushX, result.pushZ) || 1;
+        p.body.velocity.x = (result.pushX / d) * HAZARD_KNOCK_H;
+        p.body.velocity.z = (result.pushZ / d) * HAZARD_KNOCK_H;
+        p.body.velocity.y = HAZARD_KNOCK_V;
+        p.invulnerableUntil = now + 700; // 빌런보다 짧게 — 연달아 스치는 환경 장애물이라 너무 길면 답답함
+        break;
+      }
+    }
+  });
+}
 
 const levelStart = Date.now();
 function elapsed() { return (Date.now() - levelStart) / 1000; }
@@ -422,6 +478,7 @@ setInterval(() => {
 
   world.step(DT, timeSinceLastCalled, 5);
   updateVillains(simDt, now);
+  updateHazards(t, now);
 
   players.forEach((p) => {
     // 낙사 처리 — 보호막이 있으면 체크포인트까지 되돌리지 않고 떨어진 자리 위로 붙잡아준다

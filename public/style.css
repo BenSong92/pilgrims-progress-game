@@ -144,8 +144,50 @@ html, body {
 
 /* ---------- victory overlay ---------- */
 .journal-panel {
-  position: fixed; inset: 0; background: rgba(0,0,0,0.6);
+  position: fixed; inset: 0; background: rgba(0,0,0,0);
   display: flex; align-items: center; justify-content: center; z-index: 40;
+  transition: background 0.5s ease;
+}
+.journal-panel:not(.hidden) { background: rgba(10,6,2,0.72); }
+
+.journal-panel .title-card { position: relative; overflow: visible; }
+
+.victory-glow {
+  position: absolute; inset: -35%; border-radius: 50%; z-index: -1;
+  background: radial-gradient(circle, rgba(255,224,140,0.6) 0%, rgba(255,224,140,0) 70%);
+  animation: glow-pulse 2.4s ease-in-out infinite;
+}
+@keyframes glow-pulse {
+  0%, 100% { opacity: 0.55; transform: scale(0.92); }
+  50% { opacity: 1; transform: scale(1.1); }
+}
+
+.journal-panel:not(.hidden) .title-card {
+  animation: victory-pop 0.8s cubic-bezier(0.17, 0.89, 0.32, 1.4) both;
+}
+@keyframes victory-pop {
+  0% { transform: scale(0.35) translateY(50px) rotate(-3deg); opacity: 0; }
+  60% { transform: scale(1.05) translateY(-6px) rotate(1deg); opacity: 1; }
+  100% { transform: scale(1) translateY(0) rotate(0deg); opacity: 1; }
+}
+.journal-panel:not(.hidden) .title-card h1 {
+  animation: victory-fade-up 0.6s ease both; animation-delay: 0.35s;
+  text-shadow: 0 0 18px rgba(255, 210, 120, 0.75);
+}
+.journal-panel:not(.hidden) .title-card .desc:nth-of-type(1) { animation: victory-fade-up 0.6s ease both; animation-delay: 0.55s; }
+.journal-panel:not(.hidden) .title-card .desc:nth-of-type(2) { animation: victory-fade-up 0.6s ease both; animation-delay: 0.75s; }
+@keyframes victory-fade-up {
+  0% { opacity: 0; transform: translateY(14px); }
+  100% { opacity: 1; transform: translateY(0); }
+}
+
+.confetti-piece {
+  position: fixed; top: -24px; width: 9px; height: 15px; opacity: 0.95;
+  animation: confetti-fall linear forwards; z-index: 41; pointer-events: none;
+}
+@keyframes confetti-fall {
+  0% { transform: translateY(0) rotate(0deg); }
+  100% { transform: translateY(112vh) rotate(760deg); opacity: 0.35; }
 }
 
 /* ---------- toast ---------- */

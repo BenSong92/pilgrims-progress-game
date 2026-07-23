@@ -152,8 +152,27 @@ function joinGame() {
   });
   socket.on('roster', renderRoster);
   socket.on('state', onState);
-  socket.on('victory', () => els.victory.classList.remove('hidden'));
+  socket.on('victory', () => {
+    els.victory.classList.remove('hidden');
+    spawnConfetti(140);
+  });
   socket.on('toast', (data) => showToast(data && data.text));
+}
+
+// ---------- 승리 축하 연출 ----------
+const CONFETTI_COLORS = ['#c99a2e', '#e9d38a', '#c0392b', '#2e7d32', '#1f6fb2', '#8e44ad', '#fff2df'];
+function spawnConfetti(count) {
+  for (let i = 0; i < count; i++) {
+    const el = document.createElement('div');
+    el.className = 'confetti-piece';
+    el.style.left = Math.random() * 100 + 'vw';
+    el.style.background = CONFETTI_COLORS[Math.floor(Math.random() * CONFETTI_COLORS.length)];
+    el.style.animationDuration = (2.2 + Math.random() * 1.8) + 's';
+    el.style.animationDelay = (Math.random() * 0.6) + 's';
+    el.style.transform = `rotate(${Math.random() * 360}deg)`;
+    document.body.appendChild(el);
+    setTimeout(() => el.remove(), 5200);
+  }
 }
 
 let toastTimer = null;
@@ -433,6 +452,7 @@ function ensureEntity(p) {
 }
 
 let prevSelfPos = null;
+let hasArrivedBefore = false;
 function onState(data) {
   serverOffset = data.serverNow - Date.now();
 
@@ -467,6 +487,11 @@ function onState(data) {
     }
     updateQuestHud(self);
     updateBuffHud(self);
+    if (self.arrived && !hasArrivedBefore) {
+      hasArrivedBefore = true;
+      showToast('하늘의 도성에 도착했습니다! 다른 순례자들을 기다려주세요...');
+      spawnConfetti(45);
+    }
   }
 }
 
